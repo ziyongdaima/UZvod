@@ -1,8 +1,8 @@
 //@name:夸克|UC|天翼|123|百度|移动|pikpak|115|解析
-//@version:39
-//@remark:iOS 15 及以上版本可用
+//@version:40
+//@remark:夸克不转存版本，iOS 15 及以上版本可用
 //@env:百度网盘Cookie##用于播放百度网盘视频&&UCCookie##用于播放UC网盘视频&&UC_Token##UC网盘 Open API Token（可选，优先使用）&&夸克Cookie##用于播放Quark网盘视频&&转存文件夹名称##在各网盘转存文件时使用的文件夹名称&&123网盘账号##用于播放123网盘视频&&123网盘密码##用于播放123网盘视频&&天翼网盘账号##用于播放天翼网盘视频&&天翼网盘密码##用于播放天翼网盘视频&&115Cookie##用于播放115网盘视频&&PikPakToken##用于存储登录信息,Bearer 开头&&采集解析地址##内置两个，失效不要反馈。格式：名称1@地址1;名称2@地址2
-//@order: A
+//@order: C
 
 // ignore
 import {
@@ -4908,9 +4908,21 @@ class QuarkUC {
         }
 
         let playData = new PanPlayInfo()
+        playData.urls = []
 
         try {
             const { flag, shareId, shareToken, fileId, shareFileToken } = arg
+            const shareUrls = await this.getShareDownload({
+                shareId,
+                shareToken,
+                fileId,
+                shareFileToken,
+            })
+            if (shareUrls.length > 0) {
+                playData.urls = shareUrls
+                this.syncPlayData(playData)
+                return playData
+            }
 
             const saveFileId = await this.save({
                 shareId,
@@ -4930,20 +4942,26 @@ class QuarkUC {
 
             let urls = await this.getVideoPlayUrl({ fileId: fileId })
             playData.urls = urls
-            playData.urls.sort((a, b) => {
-                return b.priority - a.priority
-            })
-            playData.url = playData.urls[0].url
+            this.syncPlayData(playData)
         } catch (error) {
-            playData.error = error.toString()
-        }
-        // 检查是否有 Open API 返回的 URL
-        const hasOpenAPI = playData.urls.some(u => u.isOpenAPI)
-        if (!hasOpenAPI) {
-            // 只有在没有 Open API URL 时才设置 playHeaders
-            playData.playHeaders = this.playHeaders
+            if (playData.urls.length > 0) {
+                this.syncPlayData(playData)
+            } else {
+                playData.error = error.toString()
+            }
         }
         return playData
+    }
+
+    syncPlayData(playData) {
+        playData.urls.sort((a, b) => {
+            return b.priority - a.priority
+        })
+        const selectedUrl = playData.urls[0]
+        playData.url = selectedUrl?.url || ''
+        if (!selectedUrl?.isOpenAPI) {
+            playData.playHeaders = selectedUrl?.headers || this.playHeaders
+        }
     }
 
     async getVideoPlayUrl({ fileId, isMount = false }) {
@@ -5058,6 +5076,84 @@ class QuarkUC {
             if (shareToken?.data != null && shareToken?.data?.stoken != null) {
                 this.shareTokenCache[shareData.shareId] = shareToken?.data
             }
+        }
+    }
+
+    async getShareDownloadToken() {
+        if (!this.isQuark) return ''
+
+        const currentTimeMillis = Date.now()
+        const response = await axios.post(
+            'https://drive-social-api.quark.cn/1/clouddrive/chat/conv/file/acquire_dl_token?pr=ucpro&fr=pc&sys=darwin&ve=3.19',
+            {
+                conversation_id: `300000${currentTimeMillis}`,
+                conversation_type: 3,
+                msg_id: `${currentTimeMillis}000`,
+            },
+            {
+                headers: {
+                    ...this.headers,
+                    'Content-Type': 'application/json',
+                },
+            }
+        )
+
+        return response.status === 200 &&
+            response.data?.status === 200 &&
+            response.data?.code === 0
+            ? response.data?.data?.token || ''
+            : ''
+    }
+
+    async getShareDownload({ shareId, shareToken, fileId, shareFileToken }) {
+        if (!this.isQuark || !shareId || !fileId || !shareFileToken) return []
+
+        let stoken = shareToken || this.shareTokenCache[shareId]?.stoken || ''
+        if (!stoken) {
+            await this.getShareToken({ shareId })
+            stoken = this.shareTokenCache[shareId]?.stoken || ''
+        }
+        if (!stoken) return []
+
+        const payload = {
+            fids: [fileId],
+            fids_token: [shareFileToken],
+            pwd_id: shareId,
+            stoken,
+            speedup_session: '',
+        }
+
+        try {
+            const token = await this.getShareDownloadToken()
+            if (token) {
+                payload.token = token
+            }
+
+            const response = await axios.post(
+                'https://drive-pc.quark.cn/1/clouddrive/file/download?pr=ucpro&fr=pc',
+                payload,
+                {
+                    headers: {
+                        ...this.headers,
+                        'Content-Type': 'application/json',
+                    },
+                }
+            )
+            const url = response.data?.data?.[0]?.download_url || ''
+            if (!url) return []
+
+            return [
+                {
+                    name: '原画',
+                    url,
+                    headers: this.playHeaders,
+                    priority: 10000,
+                    isShareDownload: true,
+                },
+            ]
+        } catch (error) {
+            UZUtils.debugLog('获取夸克分享直链失败:', error)
+            return []
         }
     }
 

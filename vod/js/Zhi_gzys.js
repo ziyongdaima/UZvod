@@ -1,10 +1,11 @@
 // ignore
 //@name:[直] 瓜子²
-//@version:3
-//@webSite:https://api.gudvxty.com
+//@version:4
+//@webSite:http://api.gudvxty.com
 //@remark:瓜子WEB
 //@type:100
 //@instance:gzys20240822
+//@logo:guazi2.png
 //@order: B
 
 import {} from '../../core/uzVideo.js'
